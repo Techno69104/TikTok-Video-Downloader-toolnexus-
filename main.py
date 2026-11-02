@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 import yt_dlp
 import httpx
 
-app = FastAPI(title="TikTok Downloader API", version="3.1.0")
+app = FastAPI(title="TikTok Downloader API", version="3.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,9 +34,11 @@ def get_ydl_options():
         "extractor_args": {
             "tiktok": {"api_hostname": "api16-normal-c-useast1a.tiktokv.com"}
         },
-        # CRITICAL: Force a single file that has BOTH audio and video (progressive MP4).
-        # We also prioritize H.264 (avc1) for maximum player compatibility.
-        "format": "b[ext=mp4][vcodec^=avc1]/b[ext=mp4]/b"
+        # BULLETPROOF FORMAT STRING:
+        # 1. Try to find a progressive MP4 (both audio & video, H.264)
+        # 2. Try to find any progressive MP4
+        # 3. Fall back to whatever best format is available
+        "format": "b[ext=mp4][vcodec^=avc1]/b[ext=mp4]/best"
     }
 
 @app.get("/api/info")
@@ -58,6 +60,7 @@ def get_info(url: str = Query(...)):
             "original_url": url
         }
     except Exception as e:
+        print(f"Info extraction error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/download-file")
@@ -66,43 +69,46 @@ def download_video(url: str = Query(...)):
         raise HTTPException(status_code=400, detail="Invalid TikTok URL")
 
     try:
-        # 1. Extract the direct CDN URL (takes ~1-2 seconds)
+        # 1. Extract the direct CDN URL
         with yt_dlp.YoutubeDL(get_ydl_options()) as ydl:
             info = ydl.extract_info(url, download=False)
 
         video_url = info.get("url")
         
-        # If direct URL is missing, find the highest quality MP4 format
+        # 2. Intelligent Fallback: If direct URL is missing, dig into the formats array
         if not video_url:
             formats = info.get("formats", [])
-            mp4_formats = [
-                f for f in formats 
-                if f.get("url") and f.get("ext") == "mp4" and f.get("vcodec") != "none"
-            ]
-            if mp4_formats:
-                # Sort to find the highest quality
-                mp4_formats.sort(key=lambda f: (f.get("tbr") or f.get("filesize") or 0))
-                video_url = mp4_formats[-1]["url"]
+            
+            # Filter out broken formats
+            valid_formats = [f for f in formats if f.get("url") and f.get("vcodec") != "none"]
+            
+            if valid_formats:
+                # Try to find a combined MP4 first
+                combined_mp4 = [f for f in valid_formats if f.get("ext") == "mp4" and f.get("acodec") != "none"]
+                
+                if combined_mp4:
+                    combined_mp4.sort(key=lambda f: (f.get("tbr") or f.get("filesize") or 0))
+                    video_url = combined_mp4[-1]["url"]
+                else:
+                    # Fallback to highest quality video stream (might be video-only)
+                    valid_formats.sort(key=lambda f: (f.get("tbr") or f.get("filesize") or 0))
+                    video_url = valid_formats[-1]["url"]
 
         if not video_url:
-            raise Exception("Could not find a valid video URL.")
+            raise Exception("Could not find a downloadable video stream for this link.")
 
-        # 2. Stream the video directly to the user (0 seconds processing time)
+        # 3. Stream the video directly to the user
         def stream_video():
-            # Using a standard browser user-agent helps prevent TikTok from blocking the CDN request
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "*/*"
+                "Accept": "*/*",
+                "Referer": "https://www.tiktok.com/"
             }
             try:
                 with httpx.stream("GET", video_url, headers=headers, follow_redirects=True, timeout=30.0) as response:
                     response.raise_for_status()
                     for chunk in response.iter_bytes(chunk_size=16384):
                         yield chunk
-            except httpx.HTTPStatusError as e:
-                print(f"TikTok CDN Error: {e}")
-                # If TikTok blocks the direct stream, this will safely break the loop
-                return
             except Exception as e:
                 print(f"Streaming Error: {e}")
                 return
@@ -118,8 +124,9 @@ def download_video(url: str = Query(...)):
         )
 
     except Exception as e:
+        print(f"Download error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "3.1.0"}
+    return {"status": "ok", "version": "3.2.0"}
