@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install ffmpeg + ffprobe (needed by yt-dlp to merge audio/video)
+# Install ffmpeg + ffprobe (needed for merging and transcoding)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
