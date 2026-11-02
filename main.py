@@ -1,6 +1,8 @@
 import asyncio
 import os
 import re
+import shutil
+import tempfile
 import time
 from collections import OrderedDict
 from contextlib import asynccontextmanager
@@ -9,9 +11,10 @@ from urllib.parse import quote, urlparse
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
-VERSION = "10.0.0"
+VERSION = "11.0.0"
 
 # Set ALLOWED_ORIGINS on Render to your website, e.g. "https://yoursite.com"
 # (comma-separated for several). "*" lets anyone call your API.
@@ -210,6 +213,47 @@ async def fetch_from_tikwm(client: httpx.AsyncClient, url: str, errors: list):
     return None
 
 
+
+TMP_BASE = os.path.join(tempfile.gettempdir(), "tikdl")
+os.makedirs(TMP_BASE, exist_ok=True)
+
+
+def sweep_tmp():
+    """Delete leftover temp download folders older than 10 minutes."""
+    now = time.time()
+    try:
+        for name in os.listdir(TMP_BASE):
+            p = os.path.join(TMP_BASE, name)
+            if now - os.path.getmtime(p) > 600:
+                shutil.rmtree(p, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def _ytdlp_download(url: str, outdir: str) -> str:
+    """Let yt-dlp download the file itself (it handles TikTok's cookies/headers).
+    Writes to disk, not RAM, so memory stays low."""
+    import yt_dlp
+
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "socket_timeout": 20,
+        "retries": 3,
+        "outtmpl": os.path.join(outdir, "video.%(ext)s"),
+        # prefer H.264 without watermark; never pick the watermarked "download" format first
+        "format": "best[format_id!=download][vcodec^=h264]/best[format_id!=download]/best",
+        "max_filesize": 150 * 1024 * 1024,
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.download([url])
+    files = [f for f in os.listdir(outdir) if not f.endswith((".part", ".ytdl"))]
+    if not files:
+        raise RuntimeError("yt-dlp finished but produced no file")
+    return os.path.join(outdir, files[0])
+
+
 PROVIDERS = [fetch_from_ytdlp, fetch_from_tikwm]
 
 
@@ -270,6 +314,27 @@ async def proxy_file(url: str = Query(...), filename: str = Query("tiktok-video"
 
     info = await extract(url)
     stream = info["_stream"]
+
+    if info.get("source") == "yt-dlp":
+        sweep_tmp()
+        outdir = tempfile.mkdtemp(dir=TMP_BASE)
+        try:
+            async with ytdlp_lock:
+                path = await asyncio.wait_for(
+                    asyncio.to_thread(_ytdlp_download, url, outdir), timeout=90
+                )
+        except Exception as e:
+            shutil.rmtree(outdir, ignore_errors=True)
+            _cache.pop(url, None)
+            detail = clean_error(e)
+            print("yt-dlp download failed:", detail)
+            raise HTTPException(status_code=502, detail="Download failed: " + detail)
+        return FileResponse(
+            path,
+            media_type="video/mp4",
+            filename=f"{safe_name}.mp4",
+            background=BackgroundTask(shutil.rmtree, outdir, True),
+        )
 
     if download_sem.locked():
         raise HTTPException(status_code=429, detail="Server busy, try again in a moment.")
