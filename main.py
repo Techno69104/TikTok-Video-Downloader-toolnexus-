@@ -104,14 +104,18 @@ def build_result(title, author, thumbnail, download_url, original_url, source):
 
 
 # -------------------------------------------------------------- providers
-async def fetch_from_tikwm(client: httpx.AsyncClient, url: str):
+async def fetch_from_tikwm(client: httpx.AsyncClient, url: str, errors: list):
     """Provider 1: tikwm.com (free tier is rate limited to ~1 req/sec)."""
     for attempt in range(2):
         try:
             resp = await client.get(
                 "https://www.tikwm.com/api/", params={"url": url, "hd": 1}
             )
-            data = resp.json()
+            try:
+                data = resp.json()
+            except Exception:
+                errors.append(f"tikwm: HTTP {resp.status_code}, reply was not JSON (likely blocked)")
+                break
             if data.get("code") == 0 and data.get("data"):
                 d = data["data"]
                 play = d.get("hdplay") or d.get("play")
@@ -122,24 +126,27 @@ async def fetch_from_tikwm(client: httpx.AsyncClient, url: str):
                     return build_result(
                         d.get("title"), author, d.get("cover"), play, url, "tikwm"
                     )
-            if "limit" in str(data.get("msg", "")).lower() and attempt == 0:
+            msg = str(data.get("msg", "")) or "no video in reply"
+            if "limit" in msg.lower() and attempt == 0:
                 await asyncio.sleep(1.5)
                 continue
-            print(f"TikWM returned no video: {str(data)[:200]}")
+            errors.append(f"tikwm: {msg}")
             break
         except Exception as e:
-            print(f"TikWM failed: {e!r}")
+            errors.append(f"tikwm: {type(e).__name__}: {e}")
             break
     return None
 
 
-async def fetch_from_tiklydown(client: httpx.AsyncClient, url: str):
+async def fetch_from_tiklydown(client: httpx.AsyncClient, url: str, errors: list):
     """Provider 2: tiklydown (response shape varies, so parse defensively)."""
     try:
         resp = await client.get(
             "https://api.tiklydown.eu.org/api/download", params={"url": url}
         )
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            errors.append(f"tiklydown: HTTP {resp.status_code}")
+            return None
         data = resp.json()
         video = data.get("video")
         dl = None
@@ -155,8 +162,9 @@ async def fetch_from_tiklydown(client: httpx.AsyncClient, url: str):
                 video.get("cover") if isinstance(video, dict) else ""
             )
             return build_result(data.get("title"), author, thumb, dl, url, "tiklydown")
+        errors.append("tiklydown: no video link in reply")
     except Exception as e:
-        print(f"TiklyDown failed: {e!r}")
+        errors.append(f"tiklydown: {type(e).__name__}: {e}")
     return None
 
 
@@ -167,14 +175,16 @@ async def extract(url: str) -> dict:
     cached = cache_get(url)
     if cached:
         return cached
+    errors: list = []
     for provider in PROVIDERS:
-        result = await provider(http_client, url)
+        result = await provider(http_client, url, errors)
         if result:
             cache_set(url, result)
             return result
+    print("Extraction failed:", errors)
     raise HTTPException(
         status_code=502,
-        detail="All extraction services are currently blocked or unavailable. Please try again later.",
+        detail="All extraction services failed. Details: " + " | ".join(errors),
     )
 
 
