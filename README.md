@@ -1,72 +1,57 @@
-# TikTok Video Downloader API - No Watermark
+# TikTok Video Downloader API
 
-Powerful FastAPI based API to download TikTok videos **without watermark** and without errors.
+Lightweight FastAPI service that returns a no-watermark TikTok video link.
+It does **not** download or store videos on the server (low memory, fits Render free tier).
 
 Created by Muzammil Shah
 
-### Features
-- ✅ No Watermark Download
-- ✅ FastAPI + yt-dlp (most stable extractor)
-- ✅ CORS enabled - use from any frontend
-- ✅ Deploy ready for Render / Railway / Vercel
-- ✅ Error handling for invalid/private videos
-
-### API Endpoints
+## Endpoints
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /` | API status |
 | `GET /health` | Health check |
-| `GET /api/info?url=` | Get video info + no watermark URL |
-| `GET /api/download?url=` | Same as info, for frontend download |
+| `GET /api/info?url=` | Video info + no-watermark link |
+| `GET /api/download?url=` | Same as `/api/info` |
+| `GET /api/file?url=&filename=` | Streams the video as a file download |
 
-#### Example Request
-```
-GET /api/download?url=https://www.tiktok.com/@khaby.lame/video/723...
-```
-
-#### Example Response
+### Example response
 ```json
 {
   "status": "success",
   "title": "Video title",
   "author": "khaby.lame",
+  "thumbnail": "https://...",
+  "download_url": "https://...",
   "video_url_no_watermark": "https://...",
-  "thumbnail": "https://..."
+  "proxy_url": "https://your-app.onrender.com/api/file?url=...&filename=tiktok-video",
+  "source": "tikwm"
 }
 ```
 
-### Local Setup
+## Deploy to Render (free)
 
-```bash
-git clone https://github.com/YOUR_USERNAME/tiktok-downloader-api.git
-cd tiktok-downloader-api
-pip install -r requirements.txt
-uvicorn main:app --reload
-```
+1. Delete `Dockerfile`, `Procfile` and `runtime.txt` from the repo (not needed).
+2. Push to GitHub.
+3. Render -> New -> Blueprint (uses `render.yaml`), or New Web Service with:
+   - Build: `pip install -r requirements.txt`
+   - Start: `uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips "*" --limit-concurrency 50`
+4. Set env var `ALLOWED_ORIGINS` to your website URL.
 
-Open: http://localhost:8000/docs - You will see Swagger UI
-
-### Deploy to Render (Free)
-
-1. Push this folder to GitHub
-2. Go to https://dashboard.render.com -> New Web Service
-3. Connect your repo
-4. Build Command: `pip install -r requirements.txt`
-5. Start Command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-6. Deploy
-
-### Frontend Usage Example
+## Frontend example
 
 ```javascript
-const api = "https://your-render-url.onrender.com/api/download?url=" + encodeURIComponent(tiktokUrl)
-const res = await fetch(api)
-const data = await res.json()
-window.location.href = data.video_url_no_watermark
+const api = "https://your-app.onrender.com/api/info?url=" + encodeURIComponent(tiktokUrl);
+const res = await fetch(api);
+const data = await res.json();
+if (data.status === "success") {
+  window.location.href = data.proxy_url;   // forces a file download
+}
 ```
 
-### Important Note
-Use this tool only for videos you have rights to download. Respect TikTok's Terms of Service and creators' copyright.
+## Notes
+- Free Render services sleep after ~15 min idle; the first request can take 30-60 s.
+- Extraction relies on third-party services, which may rate-limit or block at any time.
+- Only download videos you have rights to. Respect TikTok's Terms and creators' copyright.
 
-### License
-MIT
+MIT License
