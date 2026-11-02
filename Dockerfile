@@ -2,8 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install ffmpeg (required by yt-dlp)
-RUN apt-get update && apt-get install -y ffmpeg && apt-get clean
+# Install ffmpeg + ffprobe (needed by yt-dlp to merge audio/video)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
