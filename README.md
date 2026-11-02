@@ -22,7 +22,7 @@ Created by Muzammil Shah
   "title": "Video title",
   "author": "khaby.lame",
   "thumbnail": "https://...",
-  "download_url": "https://...",
+  "download_url": "https://your-app.onrender.com/api/file?url=...",
   "video_url_no_watermark": "https://...",
   "proxy_url": "https://your-app.onrender.com/api/file?url=...&filename=tiktok-video",
   "source": "tikwm"
@@ -51,7 +51,7 @@ if (data.status === "success") {
 
 ## Notes
 - Free Render services sleep after ~15 min idle; the first request can take 30-60 s.
-- Extraction relies on third-party services, which may rate-limit or block at any time.
+- Extraction uses yt-dlp on your own server (TikWM as fallback). TikTok may block datacenter IPs at times; yt-dlp is unpinned so each redeploy picks up the latest TikTok fixes.
 - Only download videos you have rights to. Respect TikTok's Terms and creators' copyright.
 
 MIT License
