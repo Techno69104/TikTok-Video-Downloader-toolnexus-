@@ -1,10 +1,15 @@
 services:
   - type: web
     name: tiktok-downloader-api
-    env: python
+    runtime: python
     plan: free
-    buildCommand: apt-get update && apt-get install -y ffmpeg && pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips "*" --limit-concurrency 50
+    healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.0
+        value: 3.11.9
+      - key: ALLOWED_ORIGINS
+        value: "*"            # change to your website, e.g. https://yoursite.com
+      - key: MAX_CONCURRENT_DOWNLOADS
+        value: "3"
